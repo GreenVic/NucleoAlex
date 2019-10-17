@@ -67,6 +67,10 @@ extern "C" {
 
 /* Exported macro ------------------------------------------------------------*/
 /* USER CODE BEGIN EM */
+/* Definition for FDCANx's NVIC IRQ and IRQ Handlers */
+#define FDCANx_IT0_IRQn   FDCAN1_IT0_IRQn
+#define FDCANx_IT1_IRQn   FDCAN1_IT1_IRQn
+#define FDCANx_IRQHandler FDCAN1_IRQHandler
 
 /* USER CODE END EM */
 

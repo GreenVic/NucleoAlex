@@ -44,6 +44,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "math.h"
+#include "stdbool.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -70,7 +71,7 @@ UART_HandleTypeDef huart1;
 /* USER CODE BEGIN PV */
 /* MMA copy paste from EVAL board example */
 FDCAN_RxHeaderTypeDef RxHeader;
-uint8_t RxData[8];
+uint8_t RxData[32];
 FDCAN_TxHeaderTypeDef TxHeader;
 uint8_t TxData[8];
 
@@ -85,7 +86,7 @@ uint32_t delay (uint32_t d)
 }
 
 
-/** MMA : COPY -> PAST from _EVAL board example
+/**
   * @brief  Configures the FDCAN.
   * @param  None
   * @retval None
@@ -95,8 +96,8 @@ static void FDCAN_Config(void)
   FDCAN_FilterTypeDef sFilterConfig;
 
   /* Bit time configuration:
-    fdcan_ker_ck               = 40 MHz
-    Time_quantum (tq)          = 25 ns
+    fdcan_ker_ck               = 80 MHz
+    Time_quantum (tq)          = 125 ns
     Synchronization_segment    = 1 tq
     Propagation_segment        = 23 tq
     Phase_segment_1            = 8 tq
@@ -108,13 +109,13 @@ static void FDCAN_Config(void)
   hfdcan1.Instance = FDCAN1;
   hfdcan1.Init.FrameFormat = FDCAN_FRAME_CLASSIC;
   hfdcan1.Init.Mode = FDCAN_MODE_NORMAL;
-  hfdcan1.Init.AutoRetransmission = DISABLE; //ENABLE;
+  hfdcan1.Init.AutoRetransmission = ENABLE; //DISABLE;
   hfdcan1.Init.TransmitPause = DISABLE;
   hfdcan1.Init.ProtocolException = ENABLE;
-  hfdcan1.Init.NominalPrescaler = 0x2; //mma: 0x4->1,25Mbps  0x2->2,5Mbps  //0x1; /* tq = NominalPrescaler x (1/fdcan_ker_ck) */
+  hfdcan1.Init.NominalPrescaler = 0x1; //use direct 40MHz kernel clock
   hfdcan1.Init.NominalSyncJumpWidth = 0x8;
-  hfdcan1.Init.NominalTimeSeg1 = 0x1F; /* NominalTimeSeg1 = Propagation_segment + Phase_segment_1 */
-  hfdcan1.Init.NominalTimeSeg2 = 0x8;
+  hfdcan1.Init.NominalTimeSeg1 = 0x1F; /* NominalTimeSeg1 = Propagation_segment + Phase_segment_1	*/
+  hfdcan1.Init.NominalTimeSeg2 = 0x8;  /* Sample point=32/40=80% CanOpen&DeviceNet=87.5% ARINC825->75%	*/
   hfdcan1.Init.MessageRAMOffset = 0;
   hfdcan1.Init.StdFiltersNbr = 1;
   hfdcan1.Init.ExtFiltersNbr = 0;
@@ -146,14 +147,12 @@ static void FDCAN_Config(void)
     Error_Handler();
   }
 
-  /* Start the FDCAN module */
-  if (HAL_FDCAN_Start(&hfdcan1) != HAL_OK)
-  {
-    /* Start Error */
-    Error_Handler();
-  }
+  /* Configure Rx FIFO 0 watermark to 2 */
+  HAL_FDCAN_ConfigFifoWatermark(&hfdcan1, FDCAN_CFG_RX_FIFO0, 2);
 
-  if (HAL_FDCAN_ActivateNotification(&hfdcan1, FDCAN_IT_RX_FIFO0_NEW_MESSAGE, 0) != HAL_OK)
+  /* Activate Rx FIFO 0 watermark notification */
+  //  HAL_FDCAN_ActivateNotification(&hfdcan1, FDCAN_IT_RX_FIFO0_WATERMARK, 0);//from eval examle
+  if (HAL_FDCAN_ActivateNotification(&hfdcan1, FDCAN_IT_RX_FIFO0_NEW_MESSAGE, 0) != HAL_OK)//used by callback too
   {
     /* Notification Error */
     Error_Handler();
@@ -163,15 +162,50 @@ static void FDCAN_Config(void)
   TxHeader.Identifier = 0x321;
   TxHeader.IdType = FDCAN_STANDARD_ID;
   TxHeader.TxFrameType = FDCAN_DATA_FRAME;
-  TxHeader.DataLength = FDCAN_DLC_BYTES_2;
+  TxHeader.DataLength = FDCAN_DLC_BYTES_8;
   TxHeader.ErrorStateIndicator = FDCAN_ESI_ACTIVE;
   TxHeader.BitRateSwitch = FDCAN_BRS_OFF;
   TxHeader.FDFormat = FDCAN_CLASSIC_CAN;
   TxHeader.TxEventFifoControl = FDCAN_NO_TX_EVENTS;
   TxHeader.MessageMarker = 0;
+
+  /* Start the FDCAN module */
+  if (HAL_FDCAN_Start(&hfdcan1) != HAL_OK)
+  {
+    /* Start Error */
+    Error_Handler();
+  }
+
+
 }
 
+static bool     first_poll_flag=true;
+uint32_t skipped_frames =0;
+uint32_t received_frames =0;
+static uint8_t prev_rx_seq_nr;
+void can_poll()
+{
+    while (HAL_FDCAN_GetRxFifoFillLevel(&hfdcan1, FDCAN_RX_FIFO0) < 1) {}
+    received_frames++;
+    /* Retreive Rx messages from RX FIFO0 */
+    HAL_FDCAN_GetRxMessage(&hfdcan1, FDCAN_RX_FIFO0, &RxHeader, RxData);
+    //HAL_FDCAN_GetRxMessage(&hfdcan1, FDCAN_RX_FIFO0, &RxHeader, &RxData[8]);
+    ;
+    /* check for missing message sequence */
+    if (!first_poll_flag)
+    {
+    	if((uint8_t)(RxData[2]-(uint8_t)(1))!= prev_rx_seq_nr)
+    	{
+    		skipped_frames++;
+    	}
+    }
+    else
+    {
+    	first_poll_flag=false;
+    }
+    prev_rx_seq_nr=RxData[2];
 
+}
 
 
 /* USER CODE END PV */
@@ -179,8 +213,6 @@ static void FDCAN_Config(void)
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
-static void MX_FDCAN1_Init(void);
-static void MX_USART1_UART_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -194,6 +226,7 @@ static void MX_USART1_UART_Init(void);
   * @brief  The application entry point.
   * @retval int
   */
+
 int main(void)
 {
   /* USER CODE BEGIN 1 */
@@ -218,23 +251,24 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
-  MX_FDCAN1_Init();
-  MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
   FDCAN_Config();
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-  int32_t ii=0;
+
   uint8_t key_nr=0;
+  TxData[2]=0;
   while (1)
   {
-	  key_nr=(int8_t) delay(100000+ii);
-	  ii++;
+
+#if 0
       /* Set the data to be transmitted */
+	  key_nr=(int8_t) delay(3000+(TxData[2]&0xf));
       TxData[0] = key_nr;
       TxData[1] = 0xAD;
+      TxData[2] ++;
 
       /* Start the Transmission process */
       if (HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan1, &TxHeader, TxData) != HAL_OK)
@@ -243,8 +277,10 @@ int main(void)
       	while(1) {}
         //Error_Handler();
       }
+#else
       //HAL_Delay(10);
-
+      can_poll();
+#endif
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -254,61 +290,65 @@ int main(void)
 
 /**
   * @brief System Clock Configuration
+  * System Clock config is required before starting the CAN driver
   * @retval None
   */
 void SystemClock_Config(void)
 {
-  RCC_OscInitTypeDef RCC_OscInitStruct = {0};
-  RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
+  RCC_ClkInitTypeDef RCC_ClkInitStruct;
+  RCC_OscInitTypeDef RCC_OscInitStruct;
   RCC_PeriphCLKInitTypeDef PeriphClkInitStruct = {0};
+  HAL_StatusTypeDef ret = HAL_OK;
 
-  /**Supply configuration update enable 
-  */
+  /*!< Supply configuration update enable */
   MODIFY_REG(PWR->CR3, PWR_CR3_SCUEN, 0);
-  /**Configure the main internal regulator output voltage 
-  */
+
+  /* The voltage scaling allows optimizing the power consumption when the device is
+     clocked below the maximum system frequency, to update the voltage scaling value
+     regarding system frequency refer to product datasheet.  */
   __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE1);
 
-  while ((PWR->D3CR & (PWR_D3CR_VOSRDY)) != PWR_D3CR_VOSRDY) 
-  {
-    
-  }
-  /**Initializes the CPU, AHB and APB busses clocks 
-  */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
-  RCC_OscInitStruct.HSIState = RCC_HSI_DIV1;
-  RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
+  while ((PWR->D3CR & (PWR_D3CR_VOSRDY)) != PWR_D3CR_VOSRDY) {}
+
+  /* Enable HSE Oscillator and activate PLL with HSE as source */
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
+  RCC_OscInitStruct.HSEState = RCC_HSE_ON;
+  RCC_OscInitStruct.HSIState = RCC_HSI_OFF;
+  RCC_OscInitStruct.CSIState = RCC_CSI_OFF;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
-  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSI;
-  RCC_OscInitStruct.PLL.PLLM = 4;
-  RCC_OscInitStruct.PLL.PLLN = 50;
-  RCC_OscInitStruct.PLL.PLLP = 2;
-  RCC_OscInitStruct.PLL.PLLQ = 4;
+  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
+
+  RCC_OscInitStruct.PLL.PLLM = 2; 		/* nucleo xtal = 8MHz */
+  RCC_OscInitStruct.PLL.PLLN = 200;
+  RCC_OscInitStruct.PLL.PLLP = 2;		//400MHz out
   RCC_OscInitStruct.PLL.PLLR = 2;
-  RCC_OscInitStruct.PLL.PLLRGE = RCC_PLL1VCIRANGE_3;
+  RCC_OscInitStruct.PLL.PLLQ = 20;  /* fdcan_ker_ck = 40 MHz */
+
   RCC_OscInitStruct.PLL.PLLVCOSEL = RCC_PLL1VCOWIDE;
-  RCC_OscInitStruct.PLL.PLLFRACN = 0;
-  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
+  RCC_OscInitStruct.PLL.PLLRGE = RCC_PLL1VCIRANGE_2;
+  ret = HAL_RCC_OscConfig(&RCC_OscInitStruct);
+  if(ret != HAL_OK)
   {
     Error_Handler();
   }
-  /**Initializes the CPU, AHB and APB busses clocks 
-  */
-  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
-                              |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2
-                              |RCC_CLOCKTYPE_D3PCLK1|RCC_CLOCKTYPE_D1PCLK1;
+
+  /* Select PLL as system clock source and configure  bus clocks dividers */
+  RCC_ClkInitStruct.ClockType = (RCC_CLOCKTYPE_SYSCLK | RCC_CLOCKTYPE_HCLK | RCC_CLOCKTYPE_D1PCLK1 | RCC_CLOCKTYPE_PCLK1 | \
+                                 RCC_CLOCKTYPE_PCLK2  | RCC_CLOCKTYPE_D3PCLK1);
+
   RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
   RCC_ClkInitStruct.SYSCLKDivider = RCC_SYSCLK_DIV1;
   RCC_ClkInitStruct.AHBCLKDivider = RCC_HCLK_DIV2;
   RCC_ClkInitStruct.APB3CLKDivider = RCC_APB3_DIV2;
-  RCC_ClkInitStruct.APB1CLKDivider = RCC_APB1_DIV2;
+  RCC_ClkInitStruct.APB1CLKDivider = RCC_APB1_DIV2; /* fdcan_pclk = 100 MHz */
   RCC_ClkInitStruct.APB2CLKDivider = RCC_APB2_DIV2;
   RCC_ClkInitStruct.APB4CLKDivider = RCC_APB4_DIV2;
-
-  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2) != HAL_OK)
+  ret = HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_4);
+  if(ret != HAL_OK)
   {
     Error_Handler();
   }
+
   PeriphClkInitStruct.PeriphClockSelection = RCC_PERIPHCLK_FDCAN|RCC_PERIPHCLK_USART1;
   PeriphClkInitStruct.FdcanClockSelection = RCC_FDCANCLKSOURCE_PLL;
   PeriphClkInitStruct.Usart16ClockSelection = RCC_USART16CLKSOURCE_D2PCLK2;
@@ -316,112 +356,13 @@ void SystemClock_Config(void)
   {
     Error_Handler();
   }
-}
-
-/**
-  * @brief FDCAN1 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_FDCAN1_Init(void)
-{
-
-  /* USER CODE BEGIN FDCAN1_Init 0 */
-
-  /* USER CODE END FDCAN1_Init 0 */
-
-  /* USER CODE BEGIN FDCAN1_Init 1 */
-
-  /* USER CODE END FDCAN1_Init 1 */
-  hfdcan1.Instance = FDCAN1;
-  hfdcan1.Init.FrameFormat = FDCAN_FRAME_CLASSIC;
-  hfdcan1.Init.Mode = FDCAN_MODE_NORMAL;
-  hfdcan1.Init.AutoRetransmission = DISABLE;
-  hfdcan1.Init.TransmitPause = ENABLE;
-  hfdcan1.Init.NominalPrescaler = 1;
-  hfdcan1.Init.NominalSyncJumpWidth = 1;
-  hfdcan1.Init.NominalTimeSeg1 = 2;
-  hfdcan1.Init.NominalTimeSeg2 = 2;
-  hfdcan1.Init.DataPrescaler = 1;
-  hfdcan1.Init.DataSyncJumpWidth = 1;
-  hfdcan1.Init.DataTimeSeg1 = 1;
-  hfdcan1.Init.DataTimeSeg2 = 1;
-  hfdcan1.Init.MessageRAMOffset = 0;
-  hfdcan1.Init.StdFiltersNbr = 0;
-  hfdcan1.Init.ExtFiltersNbr = 0;
-  hfdcan1.Init.RxFifo0ElmtsNbr = 0;
-  hfdcan1.Init.RxFifo0ElmtSize = FDCAN_DATA_BYTES_8;
-  hfdcan1.Init.RxFifo1ElmtsNbr = 0;
-  hfdcan1.Init.RxFifo1ElmtSize = FDCAN_DATA_BYTES_8;
-  hfdcan1.Init.RxBuffersNbr = 0;
-  hfdcan1.Init.RxBufferSize = FDCAN_DATA_BYTES_8;
-  hfdcan1.Init.TxEventsNbr = 0;
-  hfdcan1.Init.TxBuffersNbr = 0;
-  hfdcan1.Init.TxFifoQueueElmtsNbr = 0;
-  hfdcan1.Init.TxFifoQueueMode = FDCAN_TX_FIFO_OPERATION;
-  hfdcan1.Init.TxElmtSize = FDCAN_DATA_BYTES_8;
-  hfdcan1.msgRam.StandardFilterSA = 0;
-  hfdcan1.msgRam.ExtendedFilterSA = 0;
-  hfdcan1.msgRam.RxFIFO0SA = 0;
-  hfdcan1.msgRam.RxFIFO1SA = 0;
-  hfdcan1.msgRam.RxBufferSA = 0;
-  hfdcan1.msgRam.TxEventFIFOSA = 0;
-  hfdcan1.msgRam.TxBufferSA = 0;
-  hfdcan1.msgRam.TxFIFOQSA = 0;
-  hfdcan1.msgRam.TTMemorySA = 0;
-  hfdcan1.msgRam.EndAddress = 0;
-  hfdcan1.ErrorCode = 0;
-  if (HAL_FDCAN_Init(&hfdcan1) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN FDCAN1_Init 2 */
-
-  /* USER CODE END FDCAN1_Init 2 */
 
 }
 
-/**
-  * @brief USART1 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_USART1_UART_Init(void)
-{
-
-  /* USER CODE BEGIN USART1_Init 0 */
-
-  /* USER CODE END USART1_Init 0 */
-
-  /* USER CODE BEGIN USART1_Init 1 */
-
-  /* USER CODE END USART1_Init 1 */
-  huart1.Instance = USART1;
-  huart1.Init.BaudRate = 115200;
-  huart1.Init.WordLength = UART_WORDLENGTH_8B;
-  huart1.Init.StopBits = UART_STOPBITS_1;
-  huart1.Init.Parity = UART_PARITY_NONE;
-  huart1.Init.Mode = UART_MODE_TX_RX;
-  huart1.Init.HwFlowCtl = UART_HWCONTROL_RTS_CTS;
-  huart1.Init.OverSampling = UART_OVERSAMPLING_16;
-  huart1.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
-  huart1.Init.Prescaler = UART_PRESCALER_DIV1;
-  huart1.Init.FIFOMode = UART_FIFOMODE_DISABLE;
-  huart1.Init.TXFIFOThreshold = UART_TXFIFO_THRESHOLD_1_8;
-  huart1.Init.RXFIFOThreshold = UART_RXFIFO_THRESHOLD_1_8;
-  huart1.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
-  if (HAL_UART_Init(&huart1) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN USART1_Init 2 */
-
-  /* USER CODE END USART1_Init 2 */
-
-}
 
 /**
   * @brief GPIO Initialization Function
+  * Nucleo Board GPIO initialization
   * @param None
   * @retval None
   */
