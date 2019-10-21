@@ -214,6 +214,30 @@ void SysTick_Handler(void)
 /******************************************************************************/
 
 /* USER CODE BEGIN 1 */
+#ifdef CAN_ISR
+void FDCAN1_IT0_IRQHandler(void)
+{
+	irq_nr=1<<9;
+  HAL_GPIO_WritePin(GPIOB, LD2_Pin, GPIO_PIN_SET);
+  HAL_FDCAN_IRQHandler(&hfdcan1); //CAN IRQ handler provided by STM CAN driver
+  HAL_GPIO_WritePin(GPIOB, LD2_Pin, GPIO_PIN_RESET);
+}
 
+void FDCAN1_IT1_IRQHandler(void)
+{
+	irq_nr=1<<10;
+  HAL_GPIO_WritePin(GPIOB, LD2_Pin, GPIO_PIN_SET);
+  HAL_FDCAN_IRQHandler(&hfdcan1);
+  HAL_GPIO_WritePin(GPIOB, LD2_Pin, GPIO_PIN_RESET);
+}
+
+void FDCAN_CAL_IRQHandler(void)
+{
+	irq_nr=1<<11;
+  HAL_GPIO_WritePin(GPIOB, LD2_Pin, GPIO_PIN_SET);
+  HAL_FDCAN_IRQHandler(&hfdcan1);
+  HAL_GPIO_WritePin(GPIOB, LD2_Pin, GPIO_PIN_RESET);
+}
+#endif
 /* USER CODE END 1 */
 /************************ (C) COPYRIGHT STMicroelectronics *****END OF FILE****/

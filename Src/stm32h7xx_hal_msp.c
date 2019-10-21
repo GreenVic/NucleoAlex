@@ -128,13 +128,6 @@ void HAL_FDCAN_MspInit(FDCAN_HandleTypeDef* hfdcan)
     HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
 
   /* USER CODE BEGIN FDCAN1_MspInit 1 */
-    /* mma: 15.10.2019 added interrupt */
-    //HAL_NVIC_SetPriority(FDCANx_IT0_IRQn, 0, 1);
-    //HAL_NVIC_SetPriority(FDCANx_IT1_IRQn, 0, 1);
-    //HAL_NVIC_SetPriority(FDCAN_CAL_IRQn, 0, 0);
-    //HAL_NVIC_EnableIRQ(FDCANx_IT0_IRQn);
-    //HAL_NVIC_EnableIRQ(FDCANx_IT1_IRQn);
-    //HAL_NVIC_EnableIRQ(FDCAN_CAL_IRQn);
   /* USER CODE END FDCAN1_MspInit 1 */
   }
 

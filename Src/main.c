@@ -63,13 +63,14 @@
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
+#define CAN_TX_MODE
 
 FDCAN_HandleTypeDef hfdcan1;
 
 UART_HandleTypeDef huart1;
 
 /* USER CODE BEGIN PV */
-/* MMA copy paste from EVAL board example */
+
 FDCAN_RxHeaderTypeDef RxHeader;
 uint8_t RxData[32];
 FDCAN_TxHeaderTypeDef TxHeader;
@@ -109,7 +110,7 @@ static void FDCAN_Config(void)
   hfdcan1.Instance = FDCAN1;
   hfdcan1.Init.FrameFormat = FDCAN_FRAME_CLASSIC;
   hfdcan1.Init.Mode = FDCAN_MODE_NORMAL;
-  hfdcan1.Init.AutoRetransmission = ENABLE; //DISABLE;
+  hfdcan1.Init.AutoRetransmission = DISABLE;//ENABLE;
   hfdcan1.Init.TransmitPause = DISABLE;
   hfdcan1.Init.ProtocolException = ENABLE;
   hfdcan1.Init.NominalPrescaler = 0x1; //use direct 40MHz kernel clock
@@ -119,13 +120,13 @@ static void FDCAN_Config(void)
   hfdcan1.Init.MessageRAMOffset = 0;
   hfdcan1.Init.StdFiltersNbr = 1;
   hfdcan1.Init.ExtFiltersNbr = 0;
-  hfdcan1.Init.RxFifo0ElmtsNbr = 1;
+  hfdcan1.Init.RxFifo0ElmtsNbr = 1; //2 in evm example
   hfdcan1.Init.RxFifo0ElmtSize = FDCAN_DATA_BYTES_8;
   hfdcan1.Init.RxFifo1ElmtsNbr = 0;
   hfdcan1.Init.RxBuffersNbr = 0;
   hfdcan1.Init.TxEventsNbr = 0;
   hfdcan1.Init.TxBuffersNbr = 0;
-  hfdcan1.Init.TxFifoQueueElmtsNbr = 1;
+  hfdcan1.Init.TxFifoQueueElmtsNbr = 1; //2
   hfdcan1.Init.TxFifoQueueMode = FDCAN_TX_FIFO_OPERATION;
   hfdcan1.Init.TxElmtSize = FDCAN_DATA_BYTES_8;
   if (HAL_FDCAN_Init(&hfdcan1) != HAL_OK)
@@ -133,6 +134,13 @@ static void FDCAN_Config(void)
     /* Initialization Error */
     Error_Handler();
   }
+  /* mma: 15.10.2019 added interrupt */
+  HAL_NVIC_SetPriority(FDCANx_IT0_IRQn, 0, 1);// enable this for receive
+  //HAL_NVIC_SetPriority(FDCANx_IT1_IRQn, 0, 1);
+  //HAL_NVIC_SetPriority(FDCAN_CAL_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(FDCANx_IT0_IRQn);  //enable this for receive
+  //HAL_NVIC_EnableIRQ(FDCANx_IT1_IRQn);
+  //HAL_NVIC_EnableIRQ(FDCAN_CAL_IRQn);
 
   /* Configure Rx filter */
   sFilterConfig.IdType = FDCAN_STANDARD_ID;
@@ -140,15 +148,15 @@ static void FDCAN_Config(void)
   sFilterConfig.FilterType = FDCAN_FILTER_MASK;
   sFilterConfig.FilterConfig = FDCAN_FILTER_TO_RXFIFO0;
   sFilterConfig.FilterID1 = 0x321;
-  sFilterConfig.FilterID2 = 0x7FF;
+  sFilterConfig.FilterID2 = 0x7FF;		/* ID2 is the mask - For acceptance, MessageID and FilterID1 must match exactly */
   if (HAL_FDCAN_ConfigFilter(&hfdcan1, &sFilterConfig) != HAL_OK)
   {
     /* Filter configuration Error */
     Error_Handler();
   }
 
-  /* Configure Rx FIFO 0 watermark to 2 */
-  HAL_FDCAN_ConfigFifoWatermark(&hfdcan1, FDCAN_CFG_RX_FIFO0, 2);
+  /* Configure Rx FIFO 0 watermark to 1 */
+  HAL_FDCAN_ConfigFifoWatermark(&hfdcan1, FDCAN_CFG_RX_FIFO0, 1);
 
   /* Activate Rx FIFO 0 watermark notification */
   //  HAL_FDCAN_ActivateNotification(&hfdcan1, FDCAN_IT_RX_FIFO0_WATERMARK, 0);//from eval examle
@@ -186,6 +194,7 @@ static uint8_t prev_rx_seq_nr;
 void can_poll()
 {
     while (HAL_FDCAN_GetRxFifoFillLevel(&hfdcan1, FDCAN_RX_FIFO0) < 1) {}
+    //HAL_GPIO_WritePin(GPIOB, LD2_Pin, GPIO_PIN_SET);
     received_frames++;
     /* Retreive Rx messages from RX FIFO0 */
     HAL_FDCAN_GetRxMessage(&hfdcan1, FDCAN_RX_FIFO0, &RxHeader, RxData);
@@ -204,7 +213,7 @@ void can_poll()
     	first_poll_flag=false;
     }
     prev_rx_seq_nr=RxData[2];
-
+    //HAL_GPIO_WritePin(GPIOB, LD2_Pin, GPIO_PIN_RESET);
 }
 
 
@@ -260,26 +269,36 @@ int main(void)
 
   uint8_t key_nr=0;
   TxData[2]=0;
+  SCB_InvalidateICache();
+  SCB_EnableICache();
+  SCB_EnableDCache();
   while (1)
   {
 
-#if 0
+#ifdef CAN_TX_MODE
       /* Set the data to be transmitted */
-	  key_nr=(int8_t) delay(3000+(TxData[2]&0xf));
+	  key_nr=(int8_t) delay(300+(TxData[2]&0xf)); //3000
       TxData[0] = key_nr;
       TxData[1] = 0xAD;
       TxData[2] ++;
 
       /* Start the Transmission process */
-      if (HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan1, &TxHeader, TxData) != HAL_OK)
+      if (HAL_FDCAN_GetTxFifoFreeLevel(&hfdcan1)!=0)
       {
-        /* Transmission request Error */
-      	while(1) {}
-        //Error_Handler();
+    	  HAL_GPIO_WritePin(GPIOB, LD2_Pin, GPIO_PIN_SET);
+    	  if (HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan1, &TxHeader, TxData) != HAL_OK)
+    	  {
+    		  /* Transmission request Error */
+    		  while(1) {}
+    		  //Error_Handler();
+    	  }
+    	  HAL_GPIO_WritePin(GPIOB, LD2_Pin, GPIO_PIN_RESET);
       }
-#else
-      //HAL_Delay(10);
-      can_poll();
+#else //RX_mode
+      HAL_Delay(10);
+#ifndef CAN_ISR
+      can_poll();  //poll mode receive
+#endif
 #endif
     /* USER CODE END WHILE */
 
@@ -378,8 +397,19 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOD_CLK_ENABLE();
   __HAL_RCC_GPIOG_CLK_ENABLE();
 
+  /* mma 19.10.2019 configure debug pins PB7 & Pb14 as output */
+  GPIO_InitStruct.Pin = LD2_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+  GPIO_InitStruct.Pin = LD3_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, LD3_Pin|LD2_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOB, LD3_Pin|LD2_Pin, GPIO_PIN_RESET); /* both pins reset */
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(USB_PowerSwitchOn_GPIO_Port, USB_PowerSwitchOn_Pin, GPIO_PIN_RESET);
@@ -464,6 +494,8 @@ static void MX_GPIO_Init(void)
   */
 void HAL_FDCAN_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo0ITs)
 {
+  //HAL_GPIO_WritePin(GPIOB, LD2_Pin, GPIO_PIN_SET);
+
   if((RxFifo0ITs & FDCAN_IT_RX_FIFO0_NEW_MESSAGE) != RESET)
   {
     /* Retreive Rx messages from RX FIFO0 */
@@ -487,6 +519,7 @@ void HAL_FDCAN_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo0ITs)
       Error_Handler();
     }
   }
+  //HAL_GPIO_WritePin(GPIOB, LD2_Pin, GPIO_PIN_RESET);
 }
 
 /* USER CODE END 4 */
